@@ -32,7 +32,7 @@ const taskDueDate = document.querySelector("#taskDueDate");
 const taskDueTime = document.querySelector("#taskDueTime");
 const taskNotes = document.querySelector("#taskNotes");
 
-taskQuadrant.innerHTML = quadrants.map(q => `<option value="${q.id}">${q.name} — ${q.subtitle}</option>`).join("");
+taskQuadrant.innerHTML = quadrants.map(q => `<option value="${q.id}">${q.name} - ${q.subtitle}</option>`).join("");
 
 function todayISO() {
   const now = new Date();
@@ -89,7 +89,7 @@ function render() {
       <section class="quadrant" data-quadrant="${quadrant.id}" style="--quad:${quadrant.color};--quad-soft:${quadrant.soft};--quad-line:${quadrant.line}">
         <header class="quadrant-header">
           <span class="quadrant-number">${index + 1}</span>
-          <h2>${quadrant.name} <span>— ${quadrant.subtitle}</span></h2>
+          <h2>${quadrant.name}<span>${quadrant.subtitle}</span></h2>
           <span class="quadrant-count">${quadrantTasks.length}</span>
         </header>
         <div class="task-list">
@@ -159,12 +159,10 @@ function renderSummary() {
   const completed = tasks.filter(task => task.completed).length;
   const total = tasks.length;
   const percent = total ? Math.round(completed / total * 100) : 0;
-  document.querySelector("#progressPercent").textContent = `${percent}%`;
-  document.querySelector("#progressFraction").textContent = `${completed} / ${total} tasks`;
-  document.querySelector("#completedCount").textContent = completed;
-  document.querySelector("#remainingCount").textContent = total - completed;
+  document.querySelector("#progressFraction").textContent = `${completed} / ${total}`;
+  document.querySelector("#progressBar").style.width = `${percent}%`;
+  document.querySelector("#remainingCount").textContent = `${total - completed} remaining`;
   document.querySelector("#footerComplete").textContent = `${completed} completed today`;
-  document.querySelector("#progressRing").style.setProperty("--progress", `${percent * 3.6}deg`);
 }
 
 function openTaskModal(id = null, defaultQuadrant = "do") {
@@ -173,7 +171,7 @@ function openTaskModal(id = null, defaultQuadrant = "do") {
   taskQuadrant.value = defaultQuadrant;
   document.querySelector("#deleteTask").classList.add("hidden");
   document.querySelector("#modalEyebrow").textContent = "New task";
-  document.querySelector("#modalTitle").textContent = "Add something that matters";
+  document.querySelector("#modalTitle").textContent = "Add task";
   if (id) {
     const task = tasks.find(item => item.id === id);
     if (!task) return;
@@ -186,7 +184,7 @@ function openTaskModal(id = null, defaultQuadrant = "do") {
     taskNotes.value = task.notes;
     document.querySelector("#deleteTask").classList.remove("hidden");
     document.querySelector("#modalEyebrow").textContent = "Edit task";
-    document.querySelector("#modalTitle").textContent = "Shape the next action";
+    document.querySelector("#modalTitle").textContent = "Edit task";
   }
   modal.classList.remove("hidden");
   setTimeout(() => taskTitle.focus(), 50);
@@ -271,7 +269,6 @@ document.querySelectorAll("[data-view]").forEach(button => button.addEventListen
   activeView = button.dataset.view;
   document.querySelectorAll("[data-view]").forEach(item => item.classList.toggle("active", item === button));
   render();
-  document.querySelector("#sidebar").classList.remove("open");
 }));
 
 document.querySelector("#clearCompleted").addEventListener("click", () => {
@@ -282,15 +279,6 @@ document.querySelector("#clearCompleted").addEventListener("click", () => {
   render();
   showToast(`${count} completed task${count === 1 ? "" : "s"} cleared`);
 });
-document.querySelector("#reviewDay").addEventListener("click", () => {
-  activeView = "completed";
-  document.querySelectorAll("[data-view]").forEach(item => item.classList.toggle("active", item.dataset.view === "completed"));
-  render();
-  window.scrollTo({ top: 0, behavior: "smooth" });
-});
-document.querySelector("#openSidebar").addEventListener("click", () => document.querySelector("#sidebar").classList.add("open"));
-document.querySelector("#closeSidebar").addEventListener("click", () => document.querySelector("#sidebar").classList.remove("open"));
-
 const now = new Date();
 document.querySelector("#todayLabel").textContent = new Intl.DateTimeFormat("en", { weekday: "long" }).format(now);
 document.querySelector("#fullDate").textContent = new Intl.DateTimeFormat("en", { month: "long", day: "numeric", year: "numeric" }).format(now);
