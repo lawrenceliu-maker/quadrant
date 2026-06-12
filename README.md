@@ -2,6 +2,14 @@
 
 A calm, personal Eisenhower Matrix task planner for making room for what matters.
 
+## Preview
+
+![Quadrant desktop view](docs/screenshots/quadrant-desktop.png)
+
+<p align="center">
+  <img src="docs/screenshots/quadrant-mobile.png" alt="Quadrant mobile view" width="320" />
+</p>
+
 ## Features
 
 - Four-quadrant task planning
