@@ -17,11 +17,23 @@ that matter in view: do now, schedule, delegate, or eliminate.
 
 - Open, distraction-free four-quadrant focus board
 - Floating toolbar with Today, All, and Completed views
+- Smart Import from authorized Obsidian daily notes
 - Drag tasks between quadrants
 - Add, edit, complete, search, and delete tasks
 - Compact progress tracking
 - Browser-local persistence
 - Responsive desktop and mobile layout
+
+## Smart Import
+
+Select **Smart Import** and authorize your Obsidian daily-note folder. Quadrant
+reads today's and tomorrow's `YYYY-MM-DD.md` files, skips completed and duplicate
+items, prioritizes actionable leaf tasks, and previews each quadrant assignment
+with a short explanation before importing.
+
+Journal analysis runs entirely in the browser. Files are only read after folder
+permission is granted, and journal content is never uploaded. Smart Import
+requires the app to be served on localhost in Microsoft Edge or Google Chrome.
 
 ## Design
 

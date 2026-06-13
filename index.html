@@ -29,6 +29,9 @@
             <span>Progress</span><strong id="progressFraction">0 / 0</strong>
             <div class="progress-track"><span id="progressBar"></span></div>
           </div>
+          <button class="smart-import-button" id="smartImport" aria-label="Smart import from journal">
+            <span class="material-symbols-rounded">auto_awesome</span><span>Smart Import</span>
+          </button>
           <button class="add-button" id="openAddModal" aria-label="Add task"><span class="material-symbols-rounded">add</span></button>
         </div>
       </header>
@@ -73,6 +76,27 @@
             <button class="primary-button" type="submit">Save</button>
           </div>
         </form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop hidden" id="importModal">
+      <section class="modal import-modal" role="dialog" aria-modal="true" aria-labelledby="importModalTitle">
+        <div class="modal-header">
+          <div><p class="eyebrow">Local journal analysis</p><h2 id="importModalTitle">Smart Import</h2></div>
+          <button class="icon-button" id="closeImportModal" aria-label="Close modal"><span class="material-symbols-rounded">close</span></button>
+        </div>
+        <p class="import-intro" id="importSummary"></p>
+        <div class="import-results" id="importResults"></div>
+        <div class="import-privacy">
+          <span class="material-symbols-rounded">lock</span>
+          Your journal stays on this device. Quadrant only reads files you authorize.
+        </div>
+        <div class="import-actions">
+          <button class="secondary-button" type="button" id="chooseJournalFolder">Change folder</button>
+          <span></span>
+          <button class="secondary-button" type="button" id="cancelImport">Cancel</button>
+          <button class="primary-button" type="button" id="confirmImport">Import selected</button>
+        </div>
       </section>
     </div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

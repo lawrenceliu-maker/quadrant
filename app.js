@@ -1,4 +1,6 @@
 const STORAGE_KEY = "quadrant-tasks-v1";
+const JOURNAL_DB = "quadrant-local-journal";
+const JOURNAL_HANDLE_KEY = "journal-directory";
 
 const quadrants = [
   { id: "do", name: "DO NOW", subtitle: "Urgent & Important", color: "#b93a2c", soft: "#fbefea", line: "#e7b6ae" },
@@ -20,6 +22,8 @@ let tasks = loadTasks();
 let activeView = "today";
 let searchTerm = "";
 let draggedTaskId = null;
+let journalDirectoryHandle = null;
+let importCandidates = [];
 
 const matrix = document.querySelector("#matrix");
 const modal = document.querySelector("#taskModal");
@@ -31,6 +35,8 @@ const taskCategory = document.querySelector("#taskCategory");
 const taskDueDate = document.querySelector("#taskDueDate");
 const taskDueTime = document.querySelector("#taskDueTime");
 const taskNotes = document.querySelector("#taskNotes");
+const importModal = document.querySelector("#importModal");
+const smartImportButton = document.querySelector("#smartImport");
 
 taskQuadrant.innerHTML = quadrants.map(q => `<option value="${q.id}">${q.name} - ${q.subtitle}</option>`).join("");
 
@@ -56,6 +62,269 @@ function loadTasks() {
 
 function saveTasks() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+}
+
+function openJournalDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(JOURNAL_DB, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("handles");
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function storeJournalHandle(handle) {
+  const db = await openJournalDB();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction("handles", "readwrite");
+    transaction.objectStore("handles").put(handle, JOURNAL_HANDLE_KEY);
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+  });
+  db.close();
+}
+
+async function restoreJournalHandle() {
+  try {
+    const db = await openJournalDB();
+    journalDirectoryHandle = await new Promise((resolve, reject) => {
+      const request = db.transaction("handles").objectStore("handles").get(JOURNAL_HANDLE_KEY);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+  } catch {
+    journalDirectoryHandle = null;
+  }
+}
+
+async function selectJournalFolder() {
+  if (!window.showDirectoryPicker) {
+    throw new Error("Smart Import requires Edge or Chrome with folder access support.");
+  }
+  journalDirectoryHandle = await window.showDirectoryPicker({ id: "quadrant-journal", mode: "read", startIn: "documents" });
+  await storeJournalHandle(journalDirectoryHandle);
+  return journalDirectoryHandle;
+}
+
+async function getAuthorizedJournalFolder(forcePicker = false) {
+  if (forcePicker || !journalDirectoryHandle) return selectJournalFolder();
+  const permission = await journalDirectoryHandle.queryPermission({ mode: "read" });
+  if (permission === "granted") return journalDirectoryHandle;
+  const requested = await journalDirectoryHandle.requestPermission({ mode: "read" });
+  if (requested !== "granted") throw new Error("Folder access was not granted.");
+  return journalDirectoryHandle;
+}
+
+async function readJournalFile(directory, date) {
+  try {
+    const handle = await directory.getFileHandle(`${date}.md`);
+    const file = await handle.getFile();
+    return await file.text();
+  } catch (error) {
+    if (error.name === "NotFoundError") return "";
+    throw error;
+  }
+}
+
+function parseHeadingDate(line, fallback) {
+  const match = line.match(/(?:to\s*do|todo|tasks?).*?(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})/i);
+  if (!match) return fallback;
+  return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
+}
+
+function cleanJournalTaskTitle(value) {
+  return value
+    .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target, label) => label || target)
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[*_`#]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseJournalTodos(content, defaultDate, sourceFile) {
+  let contextDate = defaultDate;
+  const parsed = [];
+  content.split(/\r?\n/).forEach((line, lineIndex) => {
+    contextDate = parseHeadingDate(line, contextDate);
+    const match = line.match(/^(\s*)[-*+]\s+\[([ xX])\]\s+(.+)$/);
+    if (!match) return;
+    const indentation = match[1].replace(/\t/g, "  ").length;
+    parsed.push({
+      title: cleanJournalTaskTitle(match[3]),
+      completed: match[2].toLowerCase() === "x",
+      indentation,
+      sourceDate: contextDate,
+      sourceFile,
+      lineIndex,
+    });
+  });
+
+  return parsed.filter((item, index) => {
+    if (item.completed || !item.title) return false;
+    for (let next = index + 1; next < parsed.length; next += 1) {
+      if (parsed[next].indentation <= item.indentation) break;
+      if (!parsed[next].completed) return false;
+    }
+    return true;
+  });
+}
+
+function includesAny(text, words) {
+  return words.some(word => text.includes(word));
+}
+
+function categorizeTask(title) {
+  const text = title.toLowerCase();
+  if (includesAny(text, ["job", "application", "cv", "linkedin", "interview", "career", "position"])) return "Career";
+  if (includesAny(text, ["study", "learn", "practice", "revision", "prd", "product", "road map", "roadmap", "stakeholder"])) return "Growth";
+  if (includesAny(text, ["doctor", "health", "exercise", "sleep"])) return "Health";
+  if (includesAny(text, ["email", "reply", "book", "laundry", "pay", "call", "follow up"])) return "Admin";
+  return "Personal";
+}
+
+function analyzeJournalTask(item) {
+  const text = item.title.toLowerCase();
+  const today = todayISO();
+  const important = includesAny(text, [
+    "job", "application", "cv", "interview", "study", "learn", "practice", "revision",
+    "prd", "product", "project", "plan", "goal", "doctor", "health", "exercise", "career", "stakeholder", "flower",
+  ]);
+  const urgentLanguage = includesAny(text, ["urgent", "today", "now", "deadline", "overdue", "send out", "follow up", "pay"]);
+  const delegatable = includesAny(text, ["laundry", "book", "routine", "email", "reply", "schedule", "organize", "admin"]);
+  const lowValue = includesAny(text, ["browse", "scroll", "someday", "maybe", "old downloads"]);
+  const dueToday = item.sourceDate <= today;
+  const urgent = dueToday || urgentLanguage;
+  let quadrant;
+  let reason;
+  let score = (important ? 3 : 0) + (urgent ? 2 : 0) + (urgentLanguage ? 1 : 0);
+
+  if (lowValue && !important) {
+    quadrant = "eliminate";
+    reason = "Low-impact activity; remove it to protect focus.";
+  } else if (important && urgent) {
+    quadrant = "do";
+    reason = dueToday
+      ? "Unfinished today and tied to a high-impact outcome."
+      : "High-impact task with explicit urgency.";
+  } else if (important) {
+    quadrant = "schedule";
+    reason = "Important future work; reserve focused time before it becomes urgent.";
+  } else if (urgent || delegatable) {
+    quadrant = "delegate";
+    reason = delegatable
+      ? "Necessary admin work; batch, automate, or delegate it."
+      : "Time-sensitive but lower-impact; handle quickly or delegate.";
+  } else {
+    quadrant = "eliminate";
+    reason = "No clear urgency or high-impact outcome; defer or remove it.";
+  }
+
+  return { ...item, quadrant, reason, score, category: categorizeTask(item.title) };
+}
+
+function normalizeTaskTitle(value) {
+  return value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, " ").trim();
+}
+
+function prepareImportCandidates(items, focusLimit = 5) {
+  const existingTitles = new Set(tasks.map(task => normalizeTaskTitle(task.title)));
+  const seen = new Set();
+  const analyzed = items
+    .map(analyzeJournalTask)
+    .filter(item => {
+      const key = normalizeTaskTitle(item.title);
+      if (!key || seen.has(key) || existingTitles.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+  const doNow = analyzed.filter(item => item.quadrant === "do").sort((a, b) => b.score - a.score);
+  doNow.slice(focusLimit).forEach(item => {
+    item.quadrant = "schedule";
+    item.reason = "Deferred to protect today's focus; important but lower priority.";
+  });
+  return analyzed;
+}
+
+function renderImportPreview(filesRead, completedToday, focusLimit) {
+  const results = document.querySelector("#importResults");
+  const summary = document.querySelector("#importSummary");
+  const selectedCount = importCandidates.length;
+  summary.textContent = `${filesRead} journal file${filesRead === 1 ? "" : "s"} analyzed. Based on ${completedToday} completed item${completedToday === 1 ? "" : "s"}, Do Now is limited to ${focusLimit}; ${selectedCount} new actionable item${selectedCount === 1 ? "" : "s"} found.`;
+  results.innerHTML = importCandidates.length
+    ? quadrants.map(quadrant => {
+      const items = importCandidates.filter(item => item.quadrant === quadrant.id);
+      if (!items.length) return "";
+      return `
+        <section class="import-group" style="--quad:${quadrant.color}">
+          <h3 class="import-group-title"><span></span>${quadrant.name} · ${items.length}</h3>
+          ${items.map(item => `
+            <label class="import-item">
+              <input type="checkbox" data-import-line="${item.lineIndex}" data-import-file="${escapeHTML(item.sourceFile)}" checked />
+              <span><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(item.reason)}</small></span>
+              <span class="import-date">${item.sourceDate === todayISO() ? "Today" : escapeHTML(item.sourceDate)}</span>
+            </label>`).join("")}
+        </section>`;
+    }).join("")
+    : `<p class="import-empty">No new actionable tasks found. Completed and already-imported items were skipped.</p>`;
+  document.querySelector("#confirmImport").disabled = !importCandidates.length;
+}
+
+async function analyzeJournal(forcePicker = false) {
+  smartImportButton.disabled = true;
+  try {
+    const directory = await getAuthorizedJournalFolder(forcePicker);
+    const dates = [todayISO(), offsetISO(1)];
+    const contents = await Promise.all(dates.map(date => readJournalFile(directory, date)));
+    const filesRead = contents.filter(Boolean).length;
+    if (!filesRead) throw new Error(`No ${dates[0]}.md or ${dates[1]}.md file was found in that folder.`);
+
+    const parsed = contents.flatMap((content, index) => content ? parseJournalTodos(content, dates[index], `${dates[index]}.md`) : []);
+    const completedToday = contents[0]
+      ? (contents[0].match(/^\s*[-*+]\s+\[[xX]\]\s+/gm) || []).length
+      : 0;
+    const totalToday = contents[0]
+      ? (contents[0].match(/^\s*[-*+]\s+\[[ xX]\]\s+/gm) || []).length
+      : 0;
+    const completionRatio = totalToday ? completedToday / totalToday : 0;
+    const focusLimit = completionRatio >= 0.6 ? 5 : completionRatio >= 0.3 ? 4 : 3;
+    importCandidates = prepareImportCandidates(parsed, focusLimit);
+    renderImportPreview(filesRead, completedToday, focusLimit);
+    importModal.classList.remove("hidden");
+  } catch (error) {
+    if (error.name !== "AbortError") showToast(error.message || "Could not read the journal folder.");
+  } finally {
+    smartImportButton.disabled = false;
+  }
+}
+
+function closeImportModal() {
+  importModal.classList.add("hidden");
+}
+
+function importSelectedTasks() {
+  const selectedKeys = new Set(
+    [...document.querySelectorAll("[data-import-line]:checked")]
+      .map(input => `${input.dataset.importFile}:${input.dataset.importLine}`),
+  );
+  const selected = importCandidates.filter(item => selectedKeys.has(`${item.sourceFile}:${item.lineIndex}`));
+  selected.forEach(item => tasks.push({
+    id: crypto.randomUUID(),
+    title: item.title.slice(0, 80),
+    quadrant: item.quadrant,
+    category: item.category,
+    dueDate: item.sourceDate,
+    dueTime: "",
+    notes: `Smart Import: ${item.reason} Source: ${item.sourceFile}`,
+    completed: false,
+  }));
+  saveTasks();
+  closeImportModal();
+  activeView = "today";
+  document.querySelectorAll("[data-view]").forEach(item => item.classList.toggle("active", item.dataset.view === "today"));
+  render();
+  showToast(`${selected.length} task${selected.length === 1 ? "" : "s"} imported`);
 }
 
 function formatDue(task) {
@@ -251,9 +520,18 @@ document.querySelector("#openAddModal").addEventListener("click", () => openTask
 document.querySelector("#closeModal").addEventListener("click", closeTaskModal);
 document.querySelector("#cancelModal").addEventListener("click", closeTaskModal);
 document.querySelector("#deleteTask").addEventListener("click", () => removeTask(taskId.value));
+smartImportButton.addEventListener("click", () => analyzeJournal());
+document.querySelector("#chooseJournalFolder").addEventListener("click", () => analyzeJournal(true));
+document.querySelector("#closeImportModal").addEventListener("click", closeImportModal);
+document.querySelector("#cancelImport").addEventListener("click", closeImportModal);
+document.querySelector("#confirmImport").addEventListener("click", importSelectedTasks);
 modal.addEventListener("click", event => { if (event.target === modal) closeTaskModal(); });
+importModal.addEventListener("click", event => { if (event.target === importModal) closeImportModal(); });
 document.addEventListener("keydown", event => {
-  if (event.key === "Escape") closeTaskModal();
+  if (event.key === "Escape") {
+    closeTaskModal();
+    closeImportModal();
+  }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
     event.preventDefault();
     document.querySelector("#searchInput").focus();
@@ -282,4 +560,5 @@ document.querySelector("#clearCompleted").addEventListener("click", () => {
 const now = new Date();
 document.querySelector("#todayLabel").textContent = new Intl.DateTimeFormat("en", { weekday: "long" }).format(now);
 document.querySelector("#fullDate").textContent = new Intl.DateTimeFormat("en", { month: "long", day: "numeric", year: "numeric" }).format(now);
+restoreJournalHandle();
 render();
